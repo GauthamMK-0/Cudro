@@ -1,0 +1,18 @@
+robot planar2r {
+
+  joint j1 { type revolute; axis [0,0,1]; origin [0,0,0];
+             limits [-3.14159, 3.14159]; }
+  joint j2 { type revolute; axis [0,0,1]; origin [1.0,0,0];
+             limits [-3.14159, 3.14159]; }
+
+  link base   { spheres [[0,0,0, 0.05]]; parent world; joint_ref j1; }
+  link arm1   { spheres [[0.5,0,0, 0.04], [1.0,0,0, 0.04]]; parent base; joint_ref j2; }
+  link ee     { spheres [[0.5,0,0, 0.03]]; parent arm1; }
+}
+
+task keep_ee_above {
+  link ee;
+  plane { point_on_link [0,0,0]; normal [0,0,1]; offset 0.1; }
+}
+
+clearance { min_distance 0.02; }
