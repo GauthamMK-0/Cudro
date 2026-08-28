@@ -2,6 +2,7 @@
 #include <cudro/diagnostic.hpp>
 #include <cudro/lexer.hpp>
 #include <cudro/parser.hpp>
+#include <cudro/sema.hpp>
 #include <cudro/version.hpp>
 
 #include <cstdio>
@@ -139,6 +140,11 @@ int main(int argc, char** argv) {
     }
 
     if (cmd == "--check") {
+        cudro::Sema sema(spec, diags);
+        if (!sema.analyze()) {
+            cudro::print_diagnostics(diags, src);
+            return 1;
+        }
         std::printf("OK\n");
         return 0;
     }
