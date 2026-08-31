@@ -3,12 +3,17 @@
 #include <cudro/lexer.hpp>
 #include <cudro/parser.hpp>
 #include <cudro/sema.hpp>
+#include <cudro/lower.hpp>
+#include <cudro/ad.hpp>
+#include <cudro/codegen_c.hpp>
+#include <cudro/jit_tcc.hpp>
 #include <cudro/version.hpp>
 
 #include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <iostream>
 
 namespace {
 
@@ -146,6 +151,94 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::printf("OK\n");
+        return 0;
+    }
+
+    if (cmd == "--dump-dag") {
+        cudro::Sema sema(spec, diags);
+        if (!sema.analyze()) {
+            cudro::print_diagnostics(diags, src);
+            return 1;
+        }
+        cudro::ExprDAG dag;
+        cudro::lower(spec, dag);
+        dag.dump(std::cout);
+        return 0;
+    }
+
+    if (cmd == "--dump-jacobian") {
+        cudro::Sema sema(spec, diags);
+        if (!sema.analyze()) {
+            cudro::print_diagnostics(diags, src);
+            return 1;
+        }
+        cudro::ExprDAG dag;
+        auto constraint_outputs = cudro::lower(spec, dag);
+        auto ad_result = cudro::differentiate(dag, constraint_outputs, dag.num_inputs());
+        std::cout << "Jacobian (" << ad_result.num_constraints << "x" << ad_result.num_inputs << "):\n";
+        for (int c = 0; c < ad_result.num_constraints; ++c) {
+            std::cout << "  constraint " << c << ": ";
+            for (int i = 0; i < ad_result.num_inputs; ++i) {
+                std::printf("%.6e ", ad_result.jacobians[c][i]);
+            }
+            std::cout << "\n";
+        }
+        return 0;
+    }
+
+    if (cmd == "--jit-run") {
+        cudro::Sema sema(spec, diags);
+        if (!sema.analyze()) {
+            cudro::print_diagnostics(diags, src);
+            return 1;
+        }
+        cudro::ExprDAG dag;
+        auto constraint_outputs = cudro::lower(spec, dag);
+        
+        // Create LowerResult for codegen
+        cudro::LowerResult lr;
+        lr.dag = std::move(dag);
+        lr.constraint_outputs = std::move(constraint_outputs);
+        lr.num_inputs = lr.dag.num_inputs();
+        
+        // Generate C code
+        cudro::CodegenOptions opts;
+        std::string c_source = cudro::generate_scalar_c(lr, cudro::CodegenOptions());
+        
+        // Debug: print generated C code
+        std::cerr << "=== Generated C Code ===\n" << c_source << "\n=== End C Code ===\n";
+        
+        // JIT compile
+        
+        // JIT compile
+        auto mod = cudro::TCCJIT::compile(c_source);
+        if (!mod.handle) {
+            std::fprintf(stderr, "JIT compilation failed\n");
+            return 1;
+        }
+        
+        // Get function pointer
+        auto fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
+        if (!fn) {
+            std::fprintf(stderr, "Failed to get symbol 'project'\n");
+            return 1;
+        }
+        
+        // Run with zero config
+        int num_inputs = lr.dag.num_inputs();
+        int num_constraints = lr.constraint_outputs.size();
+        std::vector<float> q(lr.dag.num_inputs(), 0.0f);
+        std::vector<float> out_g(lr.constraint_outputs.size(), 0.0f);
+        
+        std::printf("Running JIT kernel with q=0...\n");
+        fn(q.data(), num_inputs, out_g.data());
+        
+        std::printf("g = [");
+        for (int i = 0; i < num_constraints; ++i) {
+            std::printf("%g", out_g[i]);
+            if (i < num_constraints - 1) std::printf(", ");
+        }
+        std::printf("]\n");
         return 0;
     }
 
