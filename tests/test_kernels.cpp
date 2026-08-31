@@ -80,3 +80,53 @@ clearance { min_distance 0.03; }
     // At q=0, constraint g evaluates to 0.333
     CHECK(std::abs(g[0] - 0.333f) < 1e-4f);
 }
+
+TEST_CASE("Batched Kernel Compilation and Multi-Config Execution") {
+    std::string src = R"(
+robot planar2r {
+  joint j1 { type revolute; axis [0,0,1]; origin [0,0,0]; }
+  joint j2 { type revolute; axis [0,0,1]; origin [1.0,0,0]; }
+  link base { spheres [[0,0,0, 0.05]]; parent world; joint_ref j1; }
+  link arm1 { spheres [[0.5,0,0, 0.04]]; parent base; joint_ref j2; }
+  link ee { spheres [[0.5,0,0, 0.03]]; parent arm1; }
+}
+task keep_ee_above {
+  link ee;
+  plane { point_on_link [0,0,0]; normal [0,0,1]; offset 0.1; }
+}
+)";
+
+    auto spec = parse_and_check(src);
+    cudro::ExprDAG dag;
+    auto constraint_outputs = cudro::lower(spec, dag);
+    REQUIRE(constraint_outputs.size() == 1);
+
+    cudro::LowerResult lr;
+    lr.dag = std::move(dag);
+    lr.constraint_outputs = std::move(constraint_outputs);
+    lr.num_inputs = lr.dag.num_inputs();
+
+    // Check CPU feature detection
+    bool has_avx2 = cudro::cpu_supports_avx2();
+    (void)has_avx2;
+
+    std::string batched_code = cudro::generate_batched_c(lr);
+    REQUIRE(!batched_code.empty());
+
+    auto mod = cudro::TCCJIT::compile(batched_code);
+    REQUIRE(mod.handle != nullptr);
+
+    auto batch_fn = mod.get_symbol<void(*)(const float*, int, int, float*)>("project_batch");
+    REQUIRE(batch_fn != nullptr);
+
+    const int batch_size = 16;
+    std::vector<float> q_batch(batch_size * 2, 0.0f);
+    std::vector<float> g_batch(batch_size * 1, 0.0f);
+
+    batch_fn(q_batch.data(), batch_size, 2, g_batch.data());
+
+    for (int b = 0; b < batch_size; ++b) {
+        CHECK(std::abs(g_batch[b] - (-0.1f)) < 1e-4f);
+    }
+}
+

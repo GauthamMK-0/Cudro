@@ -242,6 +242,48 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (cmd == "--jit-bench") {
+        cudro::Sema sema(spec, diags);
+        if (!sema.analyze()) {
+            cudro::print_diagnostics(diags, src);
+            return 1;
+        }
+        cudro::ExprDAG dag;
+        auto constraint_outputs = cudro::lower(spec, dag);
+        
+        cudro::LowerResult lr;
+        lr.dag = std::move(dag);
+        lr.constraint_outputs = std::move(constraint_outputs);
+        lr.num_inputs = lr.dag.num_inputs();
+        
+        cudro::CodegenOptions opts;
+        std::string batched_src = cudro::generate_batched_c(lr, opts);
+        
+        auto mod = cudro::TCCJIT::compile(batched_src);
+        if (!mod.handle) {
+            std::fprintf(stderr, "JIT compilation failed\n");
+            return 1;
+        }
+        
+        auto batch_fn = mod.get_symbol<void(*)(const float*, int, int, float*)>("project_batch");
+        if (!batch_fn) {
+            std::fprintf(stderr, "Failed to get symbol 'project_batch'\n");
+            return 1;
+        }
+        
+        const int batch_size = 1024;
+        int num_inputs = lr.dag.num_inputs();
+        int num_constraints = lr.constraint_outputs.size();
+        
+        std::vector<float> q_batch(batch_size * num_inputs, 0.1f);
+        std::vector<float> g_batch(batch_size * num_constraints, 0.0f);
+        
+        std::printf("Benchmarking batched kernel on %d configurations...\n", batch_size);
+        batch_fn(q_batch.data(), batch_size, num_inputs, g_batch.data());
+        std::printf("Done. Evaluated %d configurations successfully.\n", batch_size);
+        return 0;
+    }
+
     std::fprintf(stderr, "error: unknown command %s\n", cmd.c_str());
     return 1;
 }

@@ -81,5 +81,6 @@ Fn JITModule::get_symbol(const char* name) {
 // Explicit instantiations
 template void(*JITModule::get_symbol<void(*)(const float*, int, float*)>(const char*))(const float*, int, float*);
 template void(*JITModule::get_symbol<void(*)(const float*, float*, float*)>(const char*))(const float*, float*, float*);
+template void(*JITModule::get_symbol<void(*)(const float*, int, int, float*)>(const char*))(const float*, int, int, float*);
 
 } // namespace cudro
