@@ -71,9 +71,21 @@ add_executable(test_kernels tests/test_kernels.cpp)
 target_link_libraries(test_kernels PRIVATE cudro_core doctest)
 add_test(NAME kernels COMMAND test_kernels)
 
+add_executable(test_sema tests/test_sema.cpp)
+target_link_libraries(test_sema PRIVATE cudro_core doctest)
+add_test(NAME sema COMMAND test_sema)
+
+add_executable(test_dag tests/test_dag.cpp)
+target_link_libraries(test_dag PRIVATE cudro_core doctest)
+add_test(NAME dag COMMAND test_dag)
+
+add_executable(fuzz_spec tests/fuzz_spec.cpp)
+target_link_libraries(fuzz_spec PRIVATE cudro_core doctest)
+add_test(NAME fuzz COMMAND fuzz_spec)
+
 option(CUDRO_SANITIZERS "Build tests with ASan+UBSan" ON)
 if(CUDRO_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  foreach(t smoke test_lexer test_parser test_ad test_kernels)
+  foreach(t smoke test_lexer test_parser test_sema test_dag test_ad test_kernels fuzz_spec)
     target_compile_options(${t} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(${t} PRIVATE -fsanitize=address,undefined)
   endforeach()
