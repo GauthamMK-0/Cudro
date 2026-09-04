@@ -70,15 +70,67 @@ clearance { min_distance 0.03; }
     auto mod = cudro::TCCJIT::compile(c_code);
     REQUIRE(mod.handle != nullptr);
 
-    auto fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
-    REQUIRE(fn != nullptr);
+    auto eval_fn = mod.get_symbol<void(*)(const float*, int, float*)>("evaluate_constraints");
+    REQUIRE(eval_fn != nullptr);
+
+    auto proj_fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
+    REQUIRE(proj_fn != nullptr);
 
     std::vector<float> q(7, 0.0f);
     std::vector<float> g(1, 0.0f);
-    fn(q.data(), 7, g.data());
+    eval_fn(q.data(), 7, g.data());
 
     // At q=0, constraint g evaluates to 0.333
     CHECK(std::abs(g[0] - 0.333f) < 1e-4f);
+}
+
+TEST_CASE("Manifold projection on planar2r") {
+    std::string src = R"(
+robot planar2r {
+  joint j1 { type revolute; axis [0,0,1]; origin [0,0,0]; }
+  joint j2 { type revolute; axis [0,0,1]; origin [1.0,0,0]; }
+  link base { spheres [[0,0,0, 0.05]]; parent world; joint_ref j1; }
+  link arm1 { spheres [[0.5,0,0, 0.04]]; parent base; joint_ref j2; }
+  link ee { spheres [[0.5,0,0, 0.03]]; parent arm1; }
+}
+task keep_ee_x {
+  link ee;
+  plane { point_on_link [0,0,0]; normal [1,0,0]; offset 1.0; }
+}
+)";
+
+    auto spec = parse_and_check(src);
+    cudro::ExprDAG dag;
+    auto constraint_outputs = cudro::lower(spec, dag);
+    REQUIRE(constraint_outputs.size() == 1);
+
+    cudro::LowerResult lr;
+    lr.dag = std::move(dag);
+    lr.constraint_outputs = std::move(constraint_outputs);
+    lr.num_inputs = lr.dag.num_inputs();
+
+    std::string scalar_code = cudro::generate_scalar_c(lr);
+    auto mod = cudro::TCCJIT::compile(scalar_code);
+    REQUIRE(mod.handle != nullptr);
+
+    auto eval_fn = mod.get_symbol<void(*)(const float*, int, float*)>("evaluate_constraints");
+    REQUIRE(eval_fn != nullptr);
+
+    auto proj_fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
+    REQUIRE(proj_fn != nullptr);
+
+    // Initial non-zero angle where Jacobian is non-zero
+    std::vector<float> q_init = {0.2f, 0.3f};
+    std::vector<float> g_init(1, 0.0f);
+    eval_fn(q_init.data(), 2, g_init.data());
+    CHECK(std::abs(g_init[0]) > 0.01f);
+
+    std::vector<float> q_proj(2, 0.0f);
+    proj_fn(q_init.data(), 2, q_proj.data());
+
+    std::vector<float> g_proj(1, 0.0f);
+    eval_fn(q_proj.data(), 2, g_proj.data());
+    CHECK(std::abs(g_proj[0]) < 1e-4f);
 }
 
 TEST_CASE("Batched Kernel Compilation and Multi-Config Execution") {
@@ -116,17 +168,16 @@ task keep_ee_above {
     auto mod = cudro::TCCJIT::compile(batched_code);
     REQUIRE(mod.handle != nullptr);
 
-    auto batch_fn = mod.get_symbol<void(*)(const float*, int, int, float*)>("project_batch");
-    REQUIRE(batch_fn != nullptr);
+    auto eval_batch_fn = mod.get_symbol<void(*)(const float*, int, int, float*)>("evaluate_batch");
+    REQUIRE(eval_batch_fn != nullptr);
 
     const int batch_size = 16;
     std::vector<float> q_batch(batch_size * 2, 0.0f);
     std::vector<float> g_batch(batch_size * 1, 0.0f);
 
-    batch_fn(q_batch.data(), batch_size, 2, g_batch.data());
+    eval_batch_fn(q_batch.data(), batch_size, 2, g_batch.data());
 
     for (int b = 0; b < batch_size; ++b) {
         CHECK(std::abs(g_batch[b] - (-0.1f)) < 1e-4f);
     }
 }
-

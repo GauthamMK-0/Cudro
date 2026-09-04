@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <iostream>
+#include <chrono>
 
 namespace {
 
@@ -87,12 +88,26 @@ struct ASTDumper : cudro::ASTVisitor {
     }
 };
 
+void print_usage() {
+    std::fprintf(stderr, "usage: cudro <command> [spec-file]\n"
+                         "commands:\n"
+                         "  --dump-tokens     Tokenize spec and print token stream\n"
+                         "  --dump-ast        Parse spec and print AST structure\n"
+                         "  --check           Run semantic analysis and kinematic checks\n"
+                         "  --dump-dag        Lower spec to Expression DAG and print nodes\n"
+                         "  --dump-jacobian   Compute and print analytical Jacobian matrix\n"
+                         "  --emit-c          Emit scalar C source code\n"
+                         "  --jit-run         JIT-compile in memory and run projection on q=0\n"
+                         "  --jit-bench       Benchmark batched in-memory JIT execution\n"
+                         "  --version         Print compiler version\n"
+                         "  --help, -h        Print this help message\n");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: cudro <command> <spec-file>\n"
-                        "commands: --dump-tokens, --dump-ast, --check, --version\n");
+        print_usage();
         return 1;
     }
 
@@ -103,8 +118,14 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (cmd == "--help" || cmd == "-h") {
+        print_usage();
+        return 0;
+    }
+
     if (argc < 3) {
-        std::fprintf(stderr, "error: missing spec file\n");
+        std::fprintf(stderr, "error: missing spec file\n\n");
+        print_usage();
         return 1;
     }
 
@@ -150,7 +171,7 @@ int main(int argc, char** argv) {
             cudro::print_diagnostics(diags, src);
             return 1;
         }
-        std::printf("OK\n");
+        std::printf("OK: semantic checks and kinematic validation passed.\n");
         return 0;
     }
 
@@ -186,6 +207,24 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (cmd == "--emit-c") {
+        cudro::Sema sema(spec, diags);
+        if (!sema.analyze()) {
+            cudro::print_diagnostics(diags, src);
+            return 1;
+        }
+        cudro::ExprDAG dag;
+        auto constraint_outputs = cudro::lower(spec, dag);
+        cudro::LowerResult lr;
+        lr.dag = std::move(dag);
+        lr.constraint_outputs = std::move(constraint_outputs);
+        lr.num_inputs = lr.dag.num_inputs();
+
+        std::string c_source = cudro::generate_scalar_c(lr);
+        std::cout << c_source << "\n";
+        return 0;
+    }
+
     if (cmd == "--jit-run") {
         cudro::Sema sema(spec, diags);
         if (!sema.analyze()) {
@@ -195,50 +234,53 @@ int main(int argc, char** argv) {
         cudro::ExprDAG dag;
         auto constraint_outputs = cudro::lower(spec, dag);
         
-        // Create LowerResult for codegen
         cudro::LowerResult lr;
         lr.dag = std::move(dag);
         lr.constraint_outputs = std::move(constraint_outputs);
         lr.num_inputs = lr.dag.num_inputs();
         
-        // Generate C code
-        cudro::CodegenOptions opts;
-        std::string c_source = cudro::generate_scalar_c(lr, cudro::CodegenOptions());
-        
-        // Debug: print generated C code
-        std::cerr << "=== Generated C Code ===\n" << c_source << "\n=== End C Code ===\n";
-        
-        // JIT compile
-        
-        // JIT compile
+        auto t0 = std::chrono::high_resolution_clock::now();
+        std::string c_source = cudro::generate_scalar_c(lr);
         auto mod = cudro::TCCJIT::compile(c_source);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double compile_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
         if (!mod.handle) {
             std::fprintf(stderr, "JIT compilation failed\n");
             return 1;
         }
         
-        // Get function pointer
-        auto fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
-        if (!fn) {
-            std::fprintf(stderr, "Failed to get symbol 'project'\n");
+        auto eval_fn = mod.get_symbol<void(*)(const float*, int, float*)>("evaluate_constraints");
+        auto proj_fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
+        if (!eval_fn || !proj_fn) {
+            std::fprintf(stderr, "Failed to resolve kernel entry points\n");
             return 1;
         }
         
-        // Run with zero config
         int num_inputs = lr.dag.num_inputs();
         int num_constraints = lr.constraint_outputs.size();
-        std::vector<float> q(lr.dag.num_inputs(), 0.0f);
-        std::vector<float> out_g(lr.constraint_outputs.size(), 0.0f);
+        std::vector<float> q(num_inputs, 0.0f);
+        std::vector<float> g_init(num_constraints, 0.0f);
+        std::vector<float> q_proj(num_inputs, 0.0f);
+        std::vector<float> g_proj(num_constraints, 0.0f);
         
-        std::printf("Running JIT kernel with q=0...\n");
-        fn(q.data(), num_inputs, out_g.data());
-        
-        std::printf("g = [");
-        for (int i = 0; i < num_constraints; ++i) {
-            std::printf("%g", out_g[i]);
-            if (i < num_constraints - 1) std::printf(", ");
-        }
+        eval_fn(q.data(), num_inputs, g_init.data());
+        proj_fn(q.data(), num_inputs, q_proj.data());
+        eval_fn(q_proj.data(), num_inputs, g_proj.data());
+
+        std::printf("JIT Compilation Time: %.2f ms\n", compile_ms);
+        std::printf("Initial q = [");
+        for (int i = 0; i < num_inputs; ++i) std::printf("%.3f%s", q[i], i + 1 < num_inputs ? ", " : "");
+        std::printf("] -> g(q) = [");
+        for (int i = 0; i < num_constraints; ++i) std::printf("%.4f%s", g_init[i], i + 1 < num_constraints ? ", " : "");
         std::printf("]\n");
+
+        std::printf("Projected q* = [");
+        for (int i = 0; i < num_inputs; ++i) std::printf("%.3f%s", q_proj[i], i + 1 < num_inputs ? ", " : "");
+        std::printf("] -> g(q*) = [");
+        for (int i = 0; i < num_constraints; ++i) std::printf("%.4e%s", g_proj[i], i + 1 < num_constraints ? ", " : "");
+        std::printf("]\n");
+
         return 0;
     }
 
@@ -256,34 +298,53 @@ int main(int argc, char** argv) {
         lr.constraint_outputs = std::move(constraint_outputs);
         lr.num_inputs = lr.dag.num_inputs();
         
-        cudro::CodegenOptions opts;
-        std::string batched_src = cudro::generate_batched_c(lr, opts);
+        std::string batched_src = cudro::generate_batched_c(lr);
         
+        auto t0 = std::chrono::high_resolution_clock::now();
         auto mod = cudro::TCCJIT::compile(batched_src);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double compile_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
         if (!mod.handle) {
             std::fprintf(stderr, "JIT compilation failed\n");
             return 1;
         }
         
-        auto batch_fn = mod.get_symbol<void(*)(const float*, int, int, float*)>("project_batch");
-        if (!batch_fn) {
-            std::fprintf(stderr, "Failed to get symbol 'project_batch'\n");
+        auto batch_proj_fn = mod.get_symbol<void(*)(const float*, int, int, float*)>("project_batch");
+        auto batch_eval_fn = mod.get_symbol<void(*)(const float*, int, int, float*)>("evaluate_batch");
+        if (!batch_proj_fn || !batch_eval_fn) {
+            std::fprintf(stderr, "Failed to resolve batched symbols\n");
             return 1;
         }
         
-        const int batch_size = 1024;
+        const int batch_size = 10000;
         int num_inputs = lr.dag.num_inputs();
         int num_constraints = lr.constraint_outputs.size();
         
         std::vector<float> q_batch(batch_size * num_inputs, 0.1f);
+        std::vector<float> q_proj_batch(batch_size * num_inputs, 0.0f);
         std::vector<float> g_batch(batch_size * num_constraints, 0.0f);
         
-        std::printf("Benchmarking batched kernel on %d configurations...\n", batch_size);
-        batch_fn(q_batch.data(), batch_size, num_inputs, g_batch.data());
-        std::printf("Done. Evaluated %d configurations successfully.\n", batch_size);
+        std::printf("JIT Compile Latency: %.2f ms\n", compile_ms);
+
+        auto exec_t0 = std::chrono::high_resolution_clock::now();
+        batch_eval_fn(q_batch.data(), batch_size, num_inputs, g_batch.data());
+        auto exec_t1 = std::chrono::high_resolution_clock::now();
+        double eval_us = std::chrono::duration<double, std::micro>(exec_t1 - exec_t0).count();
+
+        auto proj_t0 = std::chrono::high_resolution_clock::now();
+        batch_proj_fn(q_batch.data(), batch_size, num_inputs, q_proj_batch.data());
+        auto proj_t1 = std::chrono::high_resolution_clock::now();
+        double proj_us = std::chrono::duration<double, std::micro>(proj_t1 - proj_t0).count();
+
+        std::printf("Batched Constraint Eval: %d configs in %.2f us (%.2f ns/config, %.2f M configs/sec)\n",
+                    batch_size, eval_us, (eval_us * 1000.0) / batch_size, (batch_size / eval_us));
+        std::printf("Batched Manifold Project: %d configs in %.2f us (%.2f us/config, %.2f k projections/sec)\n",
+                    batch_size, proj_us, (proj_us) / batch_size, (batch_size * 1000.0 / proj_us));
         return 0;
     }
 
-    std::fprintf(stderr, "error: unknown command %s\n", cmd.c_str());
+    std::fprintf(stderr, "error: unknown command %s\n\n", cmd.c_str());
+    print_usage();
     return 1;
 }
