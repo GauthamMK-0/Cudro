@@ -7,6 +7,7 @@
 #include <cudro/ad.hpp>
 #include <cudro/codegen_c.hpp>
 #include <cudro/jit_tcc.hpp>
+#include <cudro/planner.hpp>
 #include <cudro/version.hpp>
 
 #include <cstdio>
@@ -99,9 +100,11 @@ void print_usage() {
                          "  --emit-c          Emit scalar C source code\n"
                          "  --jit-run         JIT-compile in memory and run projection on q=0\n"
                          "  --jit-bench       Benchmark batched in-memory JIT execution\n"
+                         "  --plan            Plan a constraint-satisfying trajectory via in-kernel JIT\n"
                          "  --version         Print compiler version\n"
                          "  --help, -h        Print this help message\n");
 }
+
 
 } // namespace
 
@@ -341,6 +344,118 @@ int main(int argc, char** argv) {
                     batch_size, eval_us, (eval_us * 1000.0) / batch_size, (batch_size / eval_us));
         std::printf("Batched Manifold Project: %d configs in %.2f us (%.2f us/config, %.2f k projections/sec)\n",
                     batch_size, proj_us, (proj_us) / batch_size, (batch_size * 1000.0 / proj_us));
+        return 0;
+    }
+
+    if (cmd == "--plan") {
+        cudro::Sema sema(spec, diags);
+        if (!sema.analyze()) {
+            cudro::print_diagnostics(diags, src);
+            return 1;
+        }
+        cudro::ExprDAG dag;
+        auto constraint_outputs = cudro::lower(spec, dag);
+        cudro::LowerResult lr;
+        lr.dag = std::move(dag);
+        lr.constraint_outputs = std::move(constraint_outputs);
+        lr.num_inputs = lr.dag.num_inputs();
+
+        std::string c_source = cudro::generate_scalar_c(lr);
+        auto mod = cudro::TCCJIT::compile(c_source);
+        if (!mod.handle) {
+            std::fprintf(stderr, "JIT compilation failed\n");
+            return 1;
+        }
+
+        auto eval_fn = mod.get_symbol<cudro::ConstrainedPlanner::EvaluateFn>("evaluate_constraints");
+        auto proj_fn = mod.get_symbol<cudro::ConstrainedPlanner::ProjectFn>("project");
+        if (!eval_fn || !proj_fn) {
+            std::fprintf(stderr, "Failed to resolve kernel entry points\n");
+            return 1;
+        }
+
+        int dof = lr.num_inputs;
+        int num_constraints = lr.constraint_outputs.size();
+
+        cudro::JointLimits limits;
+        limits.lower.assign(dof, -3.14159f);
+        limits.upper.assign(dof, 3.14159f);
+
+        // Read robot limits if available
+        if (!spec.robots.empty()) {
+            const auto& robot = spec.robots[0];
+            for (size_t i = 0; i < robot->joints.size() && static_cast<int>(i) < dof; ++i) {
+                if (robot->joints[i]->limits) {
+                    limits.lower[i] = static_cast<float>(robot->joints[i]->limits->first);
+                    limits.upper[i] = static_cast<float>(robot->joints[i]->limits->second);
+                }
+            }
+        }
+
+        cudro::PlannerOptions opts;
+        opts.max_iterations = 4000;
+        opts.step_size = 0.15f;
+        opts.goal_bias = 0.2f;
+        opts.constraint_tolerance = 1e-3f;
+
+        cudro::ConstrainedPlanner planner(dof, num_constraints, proj_fn, eval_fn, limits, opts);
+
+        // Find valid start and goal configurations on the manifold
+        std::vector<float> start(dof, 0.0f);
+        std::vector<float> goal(dof, 0.0f);
+        bool found_start = false, found_goal = false;
+        std::mt19937 seed_rng(12345);
+
+        for (int attempt = 0; attempt < 500; ++attempt) {
+            std::vector<float> q_rand(dof);
+            for (int i = 0; i < dof; ++i) {
+                std::uniform_real_distribution<float> dist(limits.lower[i], limits.upper[i]);
+                q_rand[i] = dist(seed_rng);
+            }
+            std::vector<float> q_proj;
+            if (planner.project_configuration(q_rand, q_proj)) {
+                if (!found_start) {
+                    start = q_proj;
+                    found_start = true;
+                } else if (!found_goal) {
+                    float d = 0.0f;
+                    for (int i = 0; i < dof; ++i) d += (q_proj[i] - start[i]) * (q_proj[i] - start[i]);
+                    if (d > 0.1f) {
+                        goal = q_proj;
+                        found_goal = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!found_start || !found_goal) {
+            std::printf("FAILED: No reachable configurations found for the specified constraint on this robot.\n");
+            return 1;
+        }
+
+        std::printf("Planning constrained trajectory (%d DoF, %d constraints)...\n", dof, num_constraints);
+        auto result = planner.plan(start, goal);
+
+        if (result.success) {
+            std::printf("SUCCESS: Found feasible path in %.2f ms (%d iterations, %d JIT projection calls)\n",
+                        result.planning_time_ms, result.iterations, result.projection_count);
+            std::printf("Trajectory Waypoints: %zu\n", result.path.size());
+            for (size_t k = 0; k < result.path.size(); ++k) {
+                std::vector<float> g(num_constraints, 0.0f);
+                eval_fn(result.path[k].data(), dof, g.data());
+                std::printf("  [%2zu] q = [", k);
+                for (int i = 0; i < dof; ++i) std::printf("%.3f%s", result.path[k][i], i + 1 < dof ? ", " : "");
+                std::printf("] | g = [");
+                for (int c = 0; c < num_constraints; ++c) std::printf("%.2e%s", g[c], c + 1 < num_constraints ? ", " : "");
+                std::printf("]\n");
+            }
+        } else {
+            std::printf("FAILED: %s (in %.2f ms)\n", result.message.c_str(), result.planning_time_ms);
+            return 1;
+        }
+
+
         return 0;
     }
 

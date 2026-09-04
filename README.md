@@ -95,7 +95,7 @@ cmake --build build
 
 ### Running Tests
 
-Cudro comes with a complete suite of 9 test suites guarded by **AddressSanitizer (ASan)** and **UndefinedBehaviorSanitizer (UBSan)**:
+Cudro comes with a complete suite of 10 test suites guarded by **AddressSanitizer (ASan)** and **UndefinedBehaviorSanitizer (UBSan)**:
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -110,7 +110,8 @@ ctest --test-dir build --output-on-failure
 6. `ad`: Forward-mode dual numbers and analytical Jacobians
 7. `kernels`: Scalar and batched multi-configuration JIT execution and LM projection
 8. `reference`: **Differential validation** against independent Eigen reference models across 10,000 configurations
-9. `fuzz`: Fuzz-lite crash-freedom test under random byte streams
+9. `planner`: **Constrained motion planning** (C-RRT-Connect) validating continuous manifold trajectory generation on multi-robot models
+10. `fuzz`: Fuzz-lite crash-freedom test under random byte streams
 
 ---
 
@@ -142,9 +143,13 @@ The `cudro` binary exposes every stage of the compiler pipeline:
 
 # 8. Benchmark batched multi-configuration projection throughput
 ./build/cudro --jit-bench spec/planar2r.cudro
+
+# 9. Plan a constraint-satisfying trajectory via in-kernel JIT solver
+./build/cudro --plan spec/panda7.cudro
 ```
 
 ---
+
 
 ## 📝 Example Specification (`.cudro`)
 
