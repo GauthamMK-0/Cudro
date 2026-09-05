@@ -232,14 +232,15 @@ project_fn(q_init.data(), lr.num_inputs, q_proj.data());
 
 ## 📊 Performance Characteristics
 
-| Metric | Measured Value (Post-Phase 1 Optimization) | Improvement Factor |
+| Metric | Measured Value (Post-Phase 2 Analytical Jacobians) | Improvement Factor |
 |---|---|---|
-| **In-Memory JIT Compilation Latency** | **5.1 – 5.7 ms** | **~2.5× faster** (from ~14 ms) |
+| **In-Memory JIT Compilation Latency** | **5.1 – 9.5 ms** | **~2.5× faster** (from ~14 ms) |
 | **Batched Constraint Evaluation Throughput** | **2,640,000 – 6,490,000 configs / sec** | **~8× – 20× faster** |
-| **Batched Manifold Projection Throughput** | **60,000 – 96,000 full LM solves / sec** | **~7× – 11× faster** |
-| **Single Configuration Projection Latency** | **10.4 – 16.7 $\mu$s / solve** | Hard real-time deterministic |
+| **Batched Manifold Projection Throughput** | **85,920 – 120,000 full LM solves / sec** | **~10× – 14× faster** |
+| **Panda 7-DOF Projection Latency** | **11.6 $\mu$s / solve** (down from 16.7 $\mu$s) | **Exact analytical gradient (zero truncation error)** |
 | **Planar2R Lowered DAG Size** | **25 nodes** (down from 122) | **79.5% node reduction** |
-| **Differential Error vs Eigen Reference** | $< 10^{-4}$ across 10,000 random configurations | 100% verified agreement |
+| **Jacobian Codegen Strategy** | **Single-pass unified evaluator `evaluate_dag(q, g, J)`** | Eliminates $N$ finite-diff DAG passes per LM step |
+| **Differential Error vs Eigen Reference** | $< 10^{-4}$ across 10,000 random configurations | 100% verified agreement (30,022 assertions) |
 
 ---
 

@@ -26,7 +26,10 @@ static const std::string& node_var_name(int idx) {
 }
 
 // Emits the DAG node evaluation logic into a function body
-static void emit_dag_body(std::ostringstream& out, const ExprDAG& dag, const std::vector<int>& constraint_outputs, int num_inputs) {
+static void emit_dag_body(std::ostringstream& out, const ExprDAG& dag,
+                          const std::vector<int>& constraint_outputs,
+                          const std::vector<std::vector<int>>& constraint_jacobians,
+                          int num_inputs) {
     out << "    // Input copy\n";
     for (int i = 0; i < num_inputs; ++i) {
         out << "    float q" << i << " = q[" << i << "];\n";
@@ -217,54 +220,60 @@ static void emit_dag_body(std::ostringstream& out, const ExprDAG& dag, const std
     
     // Copy constraint values to out_g
     out << "\n    // Copy constraint values\n";
+    out << "    if (out_g) {\n";
     for (size_t c = 0; c < constraint_outputs.size(); ++c) {
-        out << "    out_g[" << c << "] = " << node_var_name(constraint_outputs[c]) << ";\n";
+        out << "        out_g[" << c << "] = " << node_var_name(constraint_outputs[c]) << ";\n";
+    }
+    out << "    }\n";
+
+    // Copy analytical Jacobian values to out_J
+    if (!constraint_jacobians.empty()) {
+        out << "\n    // Copy analytical Jacobian values\n";
+        out << "    if (out_J) {\n";
+        for (size_t c = 0; c < constraint_jacobians.size(); ++c) {
+            for (size_t j = 0; j < constraint_jacobians[c].size(); ++j) {
+                out << "        out_J[" << (c * num_inputs + j) << "] = "
+                    << node_var_name(constraint_jacobians[c][j]) << ";\n";
+            }
+        }
+        out << "    }\n";
     }
 }
 
 // Emits common helper routines (evaluate_dag, evaluate_jacobian, project_single)
-static void emit_shared_routines(std::ostringstream& out, const ExprDAG& dag, const std::vector<int>& constraint_outputs, int num_inputs) {
+static void emit_shared_routines(std::ostringstream& out, const ExprDAG& dag,
+                                const std::vector<int>& constraint_outputs,
+                                const std::vector<std::vector<int>>& constraint_jacobians,
+                                int num_inputs) {
     int num_constraints = static_cast<int>(constraint_outputs.size());
     
-    // Static inline DAG evaluator
-    out << "static inline void evaluate_dag(const float* q, float* out_g) {\n";
-    emit_dag_body(out, dag, constraint_outputs, num_inputs);
+    // Static inline unified DAG evaluator
+    out << "static inline void evaluate_dag(const float* q, float* out_g, float* out_J) {\n";
+    emit_dag_body(out, dag, constraint_outputs, constraint_jacobians, num_inputs);
     out << "}\n\n";
 
-    // Static inline numerical Jacobian evaluator
+    // Static inline analytical Jacobian evaluator
     out << "static inline void evaluate_jacobian(const float* q, const float* g_curr, float* out_J) {\n"
-        << "    float q_pert[" << num_inputs << "];\n"
-        << "    float g_pert[" << num_constraints << "];\n"
-        << "    const float h = 1e-4f;\n"
-        << "    const float inv_h = 1.0f / h;\n"
-        << "    for (int j = 0; j < " << num_inputs << "; ++j) {\n"
-        << "        for (int i = 0; i < " << num_inputs << "; ++i) {\n"
-        << "            q_pert[i] = q[i] + (i == j ? h : 0.0f);\n"
-        << "        }\n"
-        << "        evaluate_dag(q_pert, g_pert);\n"
-        << "        for (int c = 0; c < " << num_constraints << "; ++c) {\n"
-        << "            out_J[c * " << num_inputs << " + j] = (g_pert[c] - g_curr[c]) * inv_h;\n"
-        << "        }\n"
-        << "    }\n"
+        << "    (void)g_curr;\n"
+        << "    evaluate_dag(q, NULL, out_J);\n"
         << "}\n\n";
 
     // Static inline Levenberg-Marquardt projection for single configuration
     out << "static inline void project_single(const float* q_in, int num_inputs, float* q_out) {\n"
         << "    float q[" << num_inputs << "];\n"
-        << "    for (int i = 0; i < " << num_inputs << "; ++i) q[i] = q_in[i];\n"
+        << "    for (int i = 0; i < num_inputs; ++i) q[i] = q_in[i];\n"
         << "    float g[" << num_constraints << "];\n"
         << "    float J[" << (num_constraints * num_inputs) << "];\n"
         << "    const float lambda = 1e-3f;\n"
         << "    const int max_iters = 20;\n"
         << "    const float tol_sq = 1e-8f;\n\n"
         << "    for (int iter = 0; iter < max_iters; ++iter) {\n"
-        << "        evaluate_dag(q, g);\n"
+        << "        evaluate_dag(q, g, J);\n"
         << "        float err_sq = 0.0f;\n"
         << "        for (int c = 0; c < " << num_constraints << "; ++c) {\n"
         << "            err_sq += g[c] * g[c];\n"
         << "        }\n"
-        << "        if (err_sq < tol_sq) break;\n\n"
-        << "        evaluate_jacobian(q, g, J);\n\n";
+        << "        if (err_sq < tol_sq) break;\n\n";
 
     if (num_constraints == 1) {
         out << "        // Fast rank-1 LM step\n"
@@ -342,25 +351,30 @@ static void emit_shared_routines(std::ostringstream& out, const ExprDAG& dag, co
 
 std::string generate_scalar_c(const LowerResult& lower_result, const CodegenOptions& opts) {
     (void)opts;
-    const ExprDAG& dag = lower_result.dag;
-    int num_inputs = lower_result.num_inputs;
-    const auto& constraint_outputs = lower_result.constraint_outputs;
+    LowerResult lr = lower_result;
+    if (lr.constraint_jacobians.empty() && !lr.constraint_outputs.empty()) {
+        build_analytical_jacobians(lr);
+    }
+    const ExprDAG& dag = lr.dag;
+    int num_inputs = lr.num_inputs;
+    const auto& constraint_outputs = lr.constraint_outputs;
+    const auto& constraint_jacobians = lr.constraint_jacobians;
     
     std::ostringstream out;
     out << std::fixed << std::setprecision(6);
     
     // Header
-    out << "// Generated by Cudro Scalar Emitter - do not edit\n";
+    out << "// Generated by Cudro Scalar Emitter with Analytical Jacobians - do not edit\n";
     out << "#include <math.h>\n";
     out << "#include <stddef.h>\n\n";
     
-    emit_shared_routines(out, dag, constraint_outputs, num_inputs);
+    emit_shared_routines(out, dag, constraint_outputs, constraint_jacobians, num_inputs);
     
     // Public C entry points
     out << "// Evaluates constraint vector g(q)\n";
     out << "void evaluate_constraints(const float* q, int num_inputs, float* out_g) {\n";
     out << "    (void)num_inputs;\n";
-    out << "    evaluate_dag(q, out_g);\n";
+    out << "    evaluate_dag(q, out_g, NULL);\n";
     out << "}\n\n";
 
     out << "// Manifold projection: projects q_in onto { q : g(q) = 0 } yielding q_out\n";
@@ -373,27 +387,32 @@ std::string generate_scalar_c(const LowerResult& lower_result, const CodegenOpti
 
 std::string generate_batched_c(const LowerResult& lower_result, const CodegenOptions& opts) {
     (void)opts;
-    const ExprDAG& dag = lower_result.dag;
-    int num_inputs = lower_result.num_inputs;
-    int num_constraints = lower_result.constraint_outputs.size();
-    const auto& constraint_outputs = lower_result.constraint_outputs;
+    LowerResult lr = lower_result;
+    if (lr.constraint_jacobians.empty() && !lr.constraint_outputs.empty()) {
+        build_analytical_jacobians(lr);
+    }
+    const ExprDAG& dag = lr.dag;
+    int num_inputs = lr.num_inputs;
+    int num_constraints = lr.constraint_outputs.size();
+    const auto& constraint_outputs = lr.constraint_outputs;
+    const auto& constraint_jacobians = lr.constraint_jacobians;
     
     std::ostringstream out;
     out << std::fixed << std::setprecision(6);
     
     // Header
-    out << "// Generated by Cudro Batched Emitter - do not edit\n";
+    out << "// Generated by Cudro Batched Emitter with Analytical Jacobians - do not edit\n";
     out << "#include <math.h>\n";
     out << "#include <stddef.h>\n\n";
     
-    emit_shared_routines(out, dag, constraint_outputs, num_inputs);
+    emit_shared_routines(out, dag, constraint_outputs, constraint_jacobians, num_inputs);
 
     // Batched evaluation entry point
     out << "// Evaluates constraint vector for a batch of configurations\n";
     out << "void evaluate_batch(const float* q_batch, int batch_size, int num_inputs, float* out_g_batch) {\n";
     out << "    (void)num_inputs;\n";
     out << "    for (int b = 0; b < batch_size; ++b) {\n";
-    out << "        evaluate_dag(q_batch + b * " << num_inputs << ", out_g_batch + b * " << num_constraints << ");\n";
+    out << "        evaluate_dag(q_batch + b * " << num_inputs << ", out_g_batch + b * " << num_constraints << ", NULL);\n";
     out << "    }\n";
     out << "}\n\n";
 
