@@ -13,9 +13,16 @@
 
 namespace cudro {
 
-// Helper to get a unique variable name for a DAG node
-static std::string node_var_name(int idx) {
-    return "n" + std::to_string(idx);
+// Helper to get a unique variable name for a DAG node (cached to avoid heap churn)
+static const std::string& node_var_name(int idx) {
+    static std::vector<std::string> cache;
+    if (idx >= static_cast<int>(cache.size())) {
+        cache.resize(idx + 128);
+    }
+    if (cache[idx].empty()) {
+        cache[idx] = "n" + std::to_string(idx);
+    }
+    return cache[idx];
 }
 
 // Emits the DAG node evaluation logic into a function body
@@ -165,22 +172,34 @@ static void emit_dag_body(std::ostringstream& out, const ExprDAG& dag, const std
                     << "    " << node_var_name(i) << "[2][0] = 0.0f; " << node_var_name(i) << "[2][1] = 0.0f; " << node_var_name(i) << "[2][2] = 1.0f; " << node_var_name(i) << "[2][3] = " << node_var_name(n.operands[2]) << ";\n"
                     << "    " << node_var_name(i) << "[3][0] = 0.0f; " << node_var_name(i) << "[3][1] = 0.0f; " << node_var_name(i) << "[3][2] = 0.0f; " << node_var_name(i) << "[3][3] = 1.0f;\n";
                 break;
-            case NodeKind::MatMul:
-                out << "    for (int r = 0; r < 4; ++r) {\n"
-                    << "        for (int c = 0; c < 4; ++c) {\n"
-                    << "            float sum = 0.0f;\n"
-                    << "            for (int k = 0; k < 4; ++k) sum += " << node_var_name(n.operands[0]) << "[r][k] * " << node_var_name(n.operands[1]) << "[k][c];\n"
-                    << "            " << node_var_name(i) << "[r][c] = sum;\n"
-                    << "        }\n"
-                    << "    }\n";
+            case NodeKind::MatMul: {
+                const auto& a = node_var_name(n.operands[0]);
+                const auto& b = node_var_name(n.operands[1]);
+                const auto& dst = node_var_name(i);
+                for (int r = 0; r < 4; ++r) {
+                    for (int c = 0; c < 4; ++c) {
+                        out << "    " << dst << "[" << r << "][" << c << "] = "
+                            << a << "[" << r << "][0] * " << b << "[0][" << c << "] + "
+                            << a << "[" << r << "][1] * " << b << "[1][" << c << "] + "
+                            << a << "[" << r << "][2] * " << b << "[2][" << c << "] + "
+                            << a << "[" << r << "][3] * " << b << "[3][" << c << "];\n";
+                    }
+                }
                 break;
-            case NodeKind::MatVecMul:
-                out << "    for (int r = 0; r < 4; ++r) {\n"
-                    << "        float sum = 0.0f;\n"
-                    << "        for (int c = 0; c < 4; ++c) sum += " << node_var_name(n.operands[0]) << "[r][c] * " << node_var_name(n.operands[1]) << "[c];\n"
-                    << "        " << node_var_name(i) << "[r] = sum;\n"
-                    << "    }\n";
+            }
+            case NodeKind::MatVecMul: {
+                const auto& m = node_var_name(n.operands[0]);
+                const auto& v = node_var_name(n.operands[1]);
+                const auto& dst = node_var_name(i);
+                for (int r = 0; r < 4; ++r) {
+                    out << "    " << dst << "[" << r << "] = "
+                        << m << "[" << r << "][0] * " << v << "[0] + "
+                        << m << "[" << r << "][1] * " << v << "[1] + "
+                        << m << "[" << r << "][2] * " << v << "[2] + "
+                        << m << "[" << r << "][3] * " << v << "[3];\n";
+                }
                 break;
+            }
             case NodeKind::SubVec3:
                 out << "    " << node_var_name(i) << "[0] = " << node_var_name(n.operands[0]) << "[0];\n"
                     << "    " << node_var_name(i) << "[1] = " << node_var_name(n.operands[0]) << "[1];\n"

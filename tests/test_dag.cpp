@@ -49,7 +49,8 @@ task keep_ee_above {
     cudro::ExprDAG dag;
     auto constraint_outputs = cudro::lower(spec, dag);
     REQUIRE(constraint_outputs.size() == 1);
-    CHECK(dag.size() > 50);
+    CHECK(dag.size() >= 20);
+    CHECK(dag.size() <= 35);
     CHECK(dag.num_inputs() == 2);
 
     std::ostringstream oss;

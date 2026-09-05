@@ -60,6 +60,7 @@ private:
     EvaluateFn eval_fn_;
     JointLimits limits_;
     PlannerOptions options_;
+    mutable std::vector<float> g_scratch_;
 
     // Tree node for Constrained RRT
     struct Node {

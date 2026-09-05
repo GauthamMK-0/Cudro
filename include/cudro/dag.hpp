@@ -8,6 +8,7 @@
 #include <functional>
 #include <string_view>
 #include <iostream>
+#include <unordered_map>
 
 namespace cudro {
 
@@ -94,6 +95,7 @@ public:
 
 private:
     std::vector<Node> nodes_;
+    std::unordered_map<double, int> constant_map_;
 };
 
 // Convenience builders

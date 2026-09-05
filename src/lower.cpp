@@ -128,58 +128,30 @@ int LowerContext::build_joint_transform(const std::string& joint_name, int q_inp
 int LowerContext::lower_plane_constraint(const std::string& task_link, const PlaneConstraint& plane) {
     // g(q) = dot(normal_world, p_world) - offset
     // p_world = link_transform * point_on_link
-    
     int link_transform = link_transforms_.at(task_link);
     
     // point_on_link in local frame -> homogeneous vec4 (w=1)
-    int point_homogeneous = dag.add_quaternary(NodeKind::Vec4, 
+    int point_local = dag.add_quaternary(NodeKind::Vec4, 
         dag.add_constant(plane.point_on_link.x),
         dag.add_constant(plane.point_on_link.y),
         dag.add_constant(plane.point_on_link.z),
         dag.add_constant(1.0));
     
     // Transform point: p_world = link_transform * point_local
-    int p_world_homogeneous = dag.add_binary(NodeKind::MatVecMul, link_transforms_.at(task_link), 
-        dag.add_quaternary(NodeKind::Vec4,
-            dag.add_constant(plane.point_on_link.x),
-            dag.add_constant(plane.point_on_link.y),
-            dag.add_constant(plane.point_on_link.z),
-            dag.add_constant(1.0)));
+    int p_world = dag.add_binary(NodeKind::MatVecMul, link_transform, point_local);
     
-    // g = dot(normal, p_world) - offset
-    // p_world is the first 3 components of MatVecMul result
-    // We need SubVec3 to extract xyz from vec4
-    // For now, we'll use the MatVecMul result and assume the codegen handles SubVec3
-    
+    // Normal vector
     int normal = dag.add_ternary(NodeKind::Vec3,
         dag.add_constant(plane.normal.x),
         dag.add_constant(plane.normal.y),
         dag.add_constant(plane.normal.z));
     
+    // dot_prod = dot(normal, p_world)
+    int dot_prod = dag.add_binary(NodeKind::Dot, normal, p_world);
+    
+    // g = dot_prod - offset
     int offset = dag.add_constant(plane.offset);
-    
-    // g = dot(normal, p_world) - offset
-    // p_world is the first 3 components of MatVecMul result
-    // We need SubVec3 to extract xyz from MatVecMul result
-    int p_world = dag.add_binary(NodeKind::MatVecMul, 
-        link_transforms_.at(task_link),
-        dag.add_quaternary(NodeKind::Vec4,
-            dag.add_constant(plane.point_on_link.x),
-            dag.add_constant(plane.point_on_link.y),
-            dag.add_constant(plane.point_on_link.z),
-            dag.add_constant(1.0)));
-    
-    // g = dot(normal, p_world) - offset
-    // p_world is the first 3 components of MatVecMul result
-    // We need SubVec3 to extract xyz from MatVecMul result
-    int dot_prod = dag.add_binary(NodeKind::Dot, 
-        dag.add_ternary(NodeKind::Vec3,
-            dag.add_constant(plane.normal.x),
-            dag.add_constant(plane.normal.y),
-            dag.add_constant(plane.normal.z)),
-        p_world); // This won't work directly - need SubVec3
-    
-    return dag.add_binary(NodeKind::Sub, dot_prod, dag.add_constant(plane.offset));
+    return dag.add_binary(NodeKind::Sub, dot_prod, offset);
 }
 
 std::vector<int> lower(const Spec& spec, ExprDAG& dag) {

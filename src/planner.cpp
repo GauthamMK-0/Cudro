@@ -20,6 +20,7 @@ ConstrainedPlanner::ConstrainedPlanner(int dof, int num_constraints,
     if (limits_.upper.empty()) {
         limits_.upper.assign(dof_, 3.14159f);
     }
+    g_scratch_.assign(num_constraints_, 0.0f);
 }
 
 float ConstrainedPlanner::distance_sq(const std::vector<float>& a, const std::vector<float>& b) const {
@@ -48,12 +49,11 @@ bool ConstrainedPlanner::project_configuration(const std::vector<float>& q_in, s
     q_out.resize(dof_);
     project_fn_(q_in.data(), dof_, q_out.data());
 
-    std::vector<float> g(num_constraints_, 0.0f);
-    eval_fn_(q_out.data(), dof_, g.data());
+    eval_fn_(q_out.data(), dof_, g_scratch_.data());
 
     float err_sq = 0.0f;
     for (int c = 0; c < num_constraints_; ++c) {
-        err_sq += g[c] * g[c];
+        err_sq += g_scratch_[c] * g_scratch_[c];
     }
 
     return (std::sqrt(err_sq) <= options_.constraint_tolerance);
@@ -75,12 +75,11 @@ std::vector<float> ConstrainedPlanner::sample_random_config(const std::vector<fl
 
 bool ConstrainedPlanner::validate_path(const std::vector<std::vector<float>>& path, float tolerance) const {
     if (path.empty()) return false;
-    std::vector<float> g(num_constraints_, 0.0f);
     for (const auto& waypoint : path) {
-        eval_fn_(waypoint.data(), dof_, g.data());
+        eval_fn_(waypoint.data(), dof_, g_scratch_.data());
         float err_sq = 0.0f;
         for (int c = 0; c < num_constraints_; ++c) {
-            err_sq += g[c] * g[c];
+            err_sq += g_scratch_[c] * g_scratch_[c];
         }
         if (std::sqrt(err_sq) > tolerance) {
             return false;
@@ -119,6 +118,8 @@ PlannerResult ConstrainedPlanner::plan(const std::vector<float>& start, const st
     bool swapped = false;
 
     std::mt19937 rng(options_.seed);
+    std::vector<float> q_cand(dof_);
+    std::vector<float> q_proj(dof_);
 
     auto extend_tree = [&](std::vector<Node>& tree, const std::vector<float>& target, int& new_node_idx) -> bool {
         int near_idx = find_nearest_node(tree, target);
@@ -127,14 +128,12 @@ PlannerResult ConstrainedPlanner::plan(const std::vector<float>& start, const st
         float dist = std::sqrt(distance_sq(q_near, target));
         if (dist < 1e-4f) return false;
 
-        std::vector<float> q_cand(dof_);
         float step = std::min(options_.step_size, dist);
         float scale = step / dist;
         for (int i = 0; i < dof_; ++i) {
             q_cand[i] = q_near[i] + (target[i] - q_near[i]) * scale;
         }
 
-        std::vector<float> q_proj;
         result.projection_count++;
         if (!project_configuration(q_cand, q_proj)) {
             return false;

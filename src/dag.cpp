@@ -16,11 +16,18 @@ int ExprDAG::add_node(NodeKind kind, std::vector<int> operands) {
 }
 
 int ExprDAG::add_constant(double v) {
+    if (v == 0.0) v = 0.0; // Normalize -0.0 to +0.0
+    auto it = constant_map_.find(v);
+    if (it != constant_map_.end()) {
+        return it->second;
+    }
     Node n;
     n.kind = NodeKind::Constant;
     n.constant_value = v;
     nodes_.push_back(n);
-    return (int)nodes_.size() - 1;
+    int idx = (int)nodes_.size() - 1;
+    constant_map_[v] = idx;
+    return idx;
 }
 
 int ExprDAG::add_input(int index, std::string_view name) {
@@ -143,11 +150,11 @@ int mat4_translate(ExprDAG& dag, int tx, int ty, int tz) {
 int mat4_rot_x(ExprDAG& dag, int angle) {
     int cos_t = dag.add_unary(NodeKind::Cos, angle);
     int sin_t = dag.add_unary(NodeKind::Sin, angle);
-    int neg_sin = dag.add_unary(NodeKind::Neg, dag.add_unary(NodeKind::Sin, angle));
+    int neg_sin = dag.add_unary(NodeKind::Neg, sin_t);
     
     return dag.add_variadic(NodeKind::Mat4, {
         dag.add_constant(1.0), dag.add_constant(0.0), dag.add_constant(0.0), dag.add_constant(0.0),
-        dag.add_constant(0.0), cos_t, dag.add_unary(NodeKind::Neg, sin_t), dag.add_constant(0.0),
+        dag.add_constant(0.0), cos_t, neg_sin, dag.add_constant(0.0),
         dag.add_constant(0.0), sin_t, cos_t, dag.add_constant(0.0),
         dag.add_constant(0.0), dag.add_constant(0.0), dag.add_constant(0.0), dag.add_constant(1.0)
     });
@@ -156,12 +163,12 @@ int mat4_rot_x(ExprDAG& dag, int angle) {
 int mat4_rot_y(ExprDAG& dag, int angle) {
     int cos_t = dag.add_unary(NodeKind::Cos, angle);
     int sin_t = dag.add_unary(NodeKind::Sin, angle);
-    int neg_sin = dag.add_unary(NodeKind::Neg, dag.add_unary(NodeKind::Sin, angle));
+    int neg_sin = dag.add_unary(NodeKind::Neg, sin_t);
     
     return dag.add_variadic(NodeKind::Mat4, {
         cos_t, dag.add_constant(0.0), sin_t, dag.add_constant(0.0),
         dag.add_constant(0.0), dag.add_constant(1.0), dag.add_constant(0.0), dag.add_constant(0.0),
-        dag.add_unary(NodeKind::Neg, sin_t), dag.add_constant(0.0), cos_t, dag.add_constant(0.0),
+        neg_sin, dag.add_constant(0.0), cos_t, dag.add_constant(0.0),
         dag.add_constant(0.0), dag.add_constant(0.0), dag.add_constant(0.0), dag.add_constant(1.0)
     });
 }
@@ -169,10 +176,10 @@ int mat4_rot_y(ExprDAG& dag, int angle) {
 int mat4_rot_z(ExprDAG& dag, int angle) {
     int cos_t = dag.add_unary(NodeKind::Cos, angle);
     int sin_t = dag.add_unary(NodeKind::Sin, angle);
-    int neg_sin = dag.add_unary(NodeKind::Neg, dag.add_unary(NodeKind::Sin, angle));
+    int neg_sin = dag.add_unary(NodeKind::Neg, sin_t);
     
     return dag.add_variadic(NodeKind::Mat4, {
-        cos_t, dag.add_unary(NodeKind::Neg, sin_t), dag.add_constant(0.0), dag.add_constant(0.0),
+        cos_t, neg_sin, dag.add_constant(0.0), dag.add_constant(0.0),
         sin_t, cos_t, dag.add_constant(0.0), dag.add_constant(0.0),
         dag.add_constant(0.0), dag.add_constant(0.0), dag.add_constant(1.0), dag.add_constant(0.0),
         dag.add_constant(0.0), dag.add_constant(0.0), dag.add_constant(0.0), dag.add_constant(1.0)
