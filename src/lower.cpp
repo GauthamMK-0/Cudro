@@ -164,7 +164,8 @@ std::vector<int> lower(const Spec& spec, ExprDAG& dag) {
     // 2. Desugar each task constraint
     for (const auto& task : spec.tasks) {
         for (const auto& plane : task->planes) {
-            int constraint_node = ctx.lower_plane_constraint(task->link, *plane);
+            const std::string& target_link = plane->link.empty() ? task->link : plane->link;
+            int constraint_node = ctx.lower_plane_constraint(target_link, *plane);
             constraint_outputs.push_back(constraint_node);
         }
     }

@@ -1,0 +1,29 @@
+robot panda7 {
+
+  joint j1 { type revolute; axis [0,0,1]; origin [0,0,0.333];
+             limits [-2.8973, 2.8973]; }
+  joint j2 { type revolute; axis [0,1,0]; origin [0,0,0];
+             limits [-1.7628, 1.7628]; }
+  joint j3 { type revolute; axis [0,0,1]; origin [0,-0.316,0];
+             limits [-2.8973, 2.8973]; }
+  joint j4 { type revolute; axis [0,1,0]; origin [0,0,0.0825]; }
+  joint j5 { type revolute; axis [0,0,1]; origin [0,0.384,0];
+             limits [-2.8973, 2.8973]; }
+  joint j6 { type revolute; axis [0,1,0]; origin [0,0,0]; }
+  joint j7 { type revolute; axis [0,0,1]; origin [0,0.107,0];
+             limits [-2.8973, 2.8973]; }
+
+  link base   { spheres [[0,0,0.06, 0.07]]; parent world; joint_ref j1; }
+  link arm1   { spheres [[0,0,0.15, 0.06], [0,0,0.30, 0.055]]; parent base; joint_ref j2; }
+  link arm2   { spheres [[0,0,0.12, 0.05]]; parent arm1; joint_ref j3; }
+  link forearm { spheres [[0,0,0.18, 0.048]]; parent arm2; joint_ref j5; }
+  link ee     { spheres [[0,0,0.02, 0.03]]; parent forearm; joint_ref j7; }
+}
+
+task line_tracking {
+  link ee;
+  plane { point_on_link [0,0,0.02]; normal [0,0,1]; offset 0.4; }
+  plane { point_on_link [0,0,0.02]; normal [0,1,0]; offset 0.0; }
+}
+
+clearance { min_distance 0.03; }

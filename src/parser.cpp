@@ -271,6 +271,11 @@ std::unique_ptr<PlaneConstraint> Parser::parse_plane_constraint() {
     // KwPlane already consumed by match() in parse_task()
     plane->loc = consume(TokenKind::LBrace, "expected '{' after 'plane'").where;
 
+    if (match(TokenKind::KwLink)) {
+        plane->link = parse_ident();
+        consume(TokenKind::Semicolon, "expected ';' after link");
+    }
+
     consume(TokenKind::KwPointOnLink, "expected 'point_on_link'");
     plane->point_on_link = parse_vec3();
     consume(TokenKind::Semicolon, "expected ';' after point_on_link");
