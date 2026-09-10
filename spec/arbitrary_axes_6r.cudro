@@ -1,0 +1,25 @@
+robot arbitrary_axes_6r {
+
+  joint j1 { type revolute; axis [0,0,1]; origin [0,0,0.2]; limits [-3.14, 3.14]; }
+  joint j2 { type revolute; axis [0.707107, 0.707107, 0]; origin [0,0,0.1]; limits [-2.0, 2.0]; }
+  joint j3 { type revolute; axis [0, 0.707107, 0.707107]; origin [0.1,0,0.2]; limits [-2.5, 2.5]; }
+  joint j4 { type revolute; axis [0.57735, 0.57735, 0.57735]; origin [0,0.1,0.1]; limits [-3.14, 3.14]; }
+  joint j5 { type revolute; axis [-0.707107, 0, 0.707107]; origin [0.1,0,0.1]; limits [-2.0, 2.0]; }
+  joint j6 { type revolute; axis [0,1,0]; origin [0,0,0.05]; limits [-3.14, 3.14]; }
+
+  link base { spheres [[0,0,0.1, 0.08]]; parent world; joint_ref j1; }
+  link arm1 { spheres [[0,0,0.05, 0.06]]; parent base; joint_ref j2; }
+  link arm2 { spheres [[0.05,0,0.1, 0.05]]; parent arm1; joint_ref j3; }
+  link arm3 { spheres [[0,0.05,0.05, 0.05]]; parent arm2; joint_ref j4; }
+  link arm4 { spheres [[0.05,0,0.05, 0.04]]; parent arm3; joint_ref j5; }
+  link ee   { spheres [[0,0,0.02, 0.03]]; parent arm4; joint_ref j6; }
+}
+
+task target_position_3d {
+  link ee;
+  plane { point_on_link [0,0,0.02]; normal [1,0,0]; offset 0.25; }
+  plane { point_on_link [0,0,0.02]; normal [0,1,0]; offset 0.15; }
+  plane { point_on_link [0,0,0.02]; normal [0,0,1]; offset 0.45; }
+}
+
+clearance { min_distance 0.02; }

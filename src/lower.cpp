@@ -34,10 +34,9 @@ void LowerContext::build_all_link_transforms() {
             
             bool ready = true;
             if (link->parent) {
-                if (!link_idx_.count(*link->parent)) {
-                    if (*link->parent != "world") {
-                        ready = false;
-                    }
+                const std::string& parent_name = *link->parent;
+                if (parent_name != "world" && !processed.count(parent_name)) {
+                    ready = false;
                 }
             }
             

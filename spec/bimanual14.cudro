@@ -1,0 +1,48 @@
+robot bimanual14 {
+
+  joint left_j1 { type revolute; axis [0,0,1]; origin [0, 0.25, 0.3]; limits [-2.89, 2.89]; }
+  joint left_j2 { type revolute; axis [0,1,0]; origin [0, 0, 0]; limits [-1.76, 1.76]; }
+  joint left_j3 { type revolute; axis [0,0,1]; origin [0, -0.2, 0]; limits [-2.89, 2.89]; }
+  joint left_j4 { type revolute; axis [0,1,0]; origin [0, 0, 0.1]; limits [-3.07, -0.06]; }
+  joint left_j5 { type revolute; axis [0,0,1]; origin [0, 0.2, 0]; limits [-2.89, 2.89]; }
+  joint left_j6 { type revolute; axis [0,1,0]; origin [0, 0, 0]; limits [-0.01, 3.75]; }
+  joint left_j7 { type revolute; axis [0,0,1]; origin [0, 0.1, 0]; limits [-2.89, 2.89]; }
+
+  joint right_j1 { type revolute; axis [0,0,1]; origin [0, -0.25, 0.3]; limits [-2.89, 2.89]; }
+  joint right_j2 { type revolute; axis [0,1,0]; origin [0, 0, 0]; limits [-1.76, 1.76]; }
+  joint right_j3 { type revolute; axis [0,0,1]; origin [0, -0.2, 0]; limits [-2.89, 2.89]; }
+  joint right_j4 { type revolute; axis [0,1,0]; origin [0, 0, 0.1]; limits [-3.07, -0.06]; }
+  joint right_j5 { type revolute; axis [0,0,1]; origin [0, 0.2, 0]; limits [-2.89, 2.89]; }
+  joint right_j6 { type revolute; axis [0,1,0]; origin [0, 0, 0]; limits [-0.01, 3.75]; }
+  joint right_j7 { type revolute; axis [0,0,1]; origin [0, 0.1, 0]; limits [-2.89, 2.89]; }
+
+  link torso     { spheres [[0,0,0.15, 0.12]]; parent world; }
+
+  link left_base { spheres [[0,0,0.05, 0.06]]; parent torso; joint_ref left_j1; }
+  link left_arm1 { spheres [[0,0,0.15, 0.05]]; parent left_base; joint_ref left_j2; }
+  link left_arm2 { spheres [[0,0,0.10, 0.05]]; parent left_arm1; joint_ref left_j3; }
+  link left_arm3 { spheres [[0,0,0.15, 0.04]]; parent left_arm2; joint_ref left_j4; }
+  link left_arm4 { spheres [[0,0,0.10, 0.04]]; parent left_arm3; joint_ref left_j5; }
+  link left_arm5 { spheres [[0,0,0.08, 0.03]]; parent left_arm4; joint_ref left_j6; }
+  link left_ee   { spheres [[0,0,0.02, 0.03]]; parent left_arm5; joint_ref left_j7; }
+
+  link right_base { spheres [[0,0,0.05, 0.06]]; parent torso; joint_ref right_j1; }
+  link right_arm1 { spheres [[0,0,0.15, 0.05]]; parent right_base; joint_ref right_j2; }
+  link right_arm2 { spheres [[0,0,0.10, 0.05]]; parent right_arm1; joint_ref right_j3; }
+  link right_arm3 { spheres [[0,0,0.15, 0.04]]; parent right_arm2; joint_ref right_j4; }
+  link right_arm4 { spheres [[0,0,0.10, 0.04]]; parent right_arm3; joint_ref right_j5; }
+  link right_arm5 { spheres [[0,0,0.08, 0.03]]; parent right_arm4; joint_ref right_j6; }
+  link right_ee   { spheres [[0,0,0.02, 0.03]]; parent right_arm5; joint_ref right_j7; }
+}
+
+task bimanual_dual_target {
+  link left_ee;
+  plane { link left_ee;  point_on_link [0,0,0.02]; normal [1,0,0]; offset 0.4; }
+  plane { link left_ee;  point_on_link [0,0,0.02]; normal [0,1,0]; offset 0.3; }
+  plane { link left_ee;  point_on_link [0,0,0.02]; normal [0,0,1]; offset 0.4; }
+  plane { link right_ee; point_on_link [0,0,0.02]; normal [1,0,0]; offset 0.4; }
+  plane { link right_ee; point_on_link [0,0,0.02]; normal [0,1,0]; offset -0.3; }
+  plane { link right_ee; point_on_link [0,0,0.02]; normal [0,0,1]; offset 0.4; }
+}
+
+clearance { min_distance 0.03; }
