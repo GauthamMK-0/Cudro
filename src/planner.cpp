@@ -47,7 +47,10 @@ int ConstrainedPlanner::find_nearest_node(const std::vector<Node>& tree, const s
 
 bool ConstrainedPlanner::project_configuration(const std::vector<float>& q_in, std::vector<float>& q_out) {
     q_out.resize(dof_);
-    project_fn_(q_in.data(), dof_, q_out.data());
+    int status = project_fn_(q_in.data(), dof_, q_out.data());
+    if (status != 0) {
+        return false;
+    }
 
     eval_fn_(q_out.data(), dof_, g_scratch_.data());
 

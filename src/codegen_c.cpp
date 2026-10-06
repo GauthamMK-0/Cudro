@@ -259,21 +259,25 @@ static void emit_shared_routines(std::ostringstream& out, const ExprDAG& dag,
         << "}\n\n";
 
     // Static inline Levenberg-Marquardt projection for single configuration
-    out << "static inline void project_single(const float* q_in, int num_inputs, float* q_out) {\n"
+    // Return codes: 0 = SUCCESS (converged), 1 = MAX_ITERS exceeded, 2 = NUMERICAL_ERROR
+    out << "static inline int project_single(const float* q_in, int num_inputs, float* q_out) {\n"
         << "    float q[" << num_inputs << "];\n"
         << "    for (int i = 0; i < num_inputs; ++i) q[i] = q_in[i];\n"
         << "    float g[" << num_constraints << "];\n"
         << "    float J[" << (num_constraints * num_inputs) << "];\n"
         << "    const float lambda = 1e-3f;\n"
         << "    const int max_iters = 20;\n"
-        << "    const float tol_sq = 1e-8f;\n\n"
+        << "    const float tol_sq = 1e-8f;\n"
+        << "    int status = 1; // Default: max iterations exceeded\n\n"
         << "    for (int iter = 0; iter < max_iters; ++iter) {\n"
         << "        evaluate_dag(q, g, J);\n"
         << "        float err_sq = 0.0f;\n"
         << "        for (int c = 0; c < " << num_constraints << "; ++c) {\n"
+        << "            if (isnan(g[c]) || isinf(g[c])) { status = 2; break; }\n"
         << "            err_sq += g[c] * g[c];\n"
         << "        }\n"
-        << "        if (err_sq < tol_sq) break;\n\n";
+        << "        if (status == 2) break;\n"
+        << "        if (err_sq < tol_sq) { status = 0; break; }\n\n";
 
     if (num_constraints == 1) {
         out << "        // Fast rank-1 LM step\n"
@@ -281,9 +285,13 @@ static void emit_shared_routines(std::ostringstream& out, const ExprDAG& dag,
             << "        for (int j = 0; j < " << num_inputs << "; ++j) {\n"
             << "            denom += J[j] * J[j];\n"
             << "        }\n"
+            << "        if (isnan(denom) || isinf(denom) || denom < 1e-12f) { status = 2; break; }\n"
             << "        for (int j = 0; j < " << num_inputs << "; ++j) {\n"
-            << "            q[j] -= (g[0] * J[j]) / denom;\n"
-            << "        }\n";
+            << "            float delta = (g[0] * J[j]) / denom;\n"
+            << "            if (isnan(delta) || isinf(delta)) { status = 2; break; }\n"
+            << "            q[j] -= delta;\n"
+            << "        }\n"
+            << "        if (status == 2) break;\n";
     } else {
         out << "        // Multi-constraint damped normal equations solve (J*J^T + lambda*I) y = -g\n"
             << "        float A[" << num_constraints << "][" << num_constraints << "];\n"
@@ -338,14 +346,21 @@ static void emit_shared_routines(std::ostringstream& out, const ExprDAG& dag,
             << "            for (int c = 0; c < " << num_constraints << "; ++c) {\n"
             << "                delta += J[c * " << num_inputs << " + j] * y[c];\n"
             << "            }\n"
+            << "            if (isnan(delta) || isinf(delta)) { status = 2; break; }\n"
             << "            q[j] += delta;\n"
-            << "        }\n";
+            << "        }\n"
+            << "        if (status == 2) break;\n";
     }
 
     out << "    }\n\n"
+        << "    if (status == 2) {\n"
+        << "        for (int i = 0; i < " << num_inputs << "; ++i) q_out[i] = q_in[i];\n"
+        << "        return 2;\n"
+        << "    }\n"
         << "    for (int i = 0; i < " << num_inputs << "; ++i) {\n"
         << "        q_out[i] = q[i];\n"
         << "    }\n"
+        << "    return status;\n"
         << "}\n\n";
 }
 
@@ -378,8 +393,9 @@ std::string generate_scalar_c(const LowerResult& lower_result, const CodegenOpti
     out << "}\n\n";
 
     out << "// Manifold projection: projects q_in onto { q : g(q) = 0 } yielding q_out\n";
-    out << "void project(const float* q_in, int num_inputs, float* q_out) {\n";
-    out << "    project_single(q_in, num_inputs, q_out);\n";
+    out << "// Returns: 0 = SUCCESS (converged), 1 = MAX_ITERS exceeded, 2 = NUMERICAL_ERROR\n";
+    out << "int project(const float* q_in, int num_inputs, float* q_out) {\n";
+    out << "    return project_single(q_in, num_inputs, q_out);\n";
     out << "}\n";
     
     return out.str();

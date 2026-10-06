@@ -1,21 +1,21 @@
 # Cudro ⚡
 
-**A Runtime-Recompiling Constraint Compiler for Real-Time Robotic Motion Planning & Safety Validation**
+**A Domain-Specific Compiler for Robot Kinematics and Constraint Manifold Projection**
 
 ---
 
 ## 📌 Overview
 
-**Cudro** is a lightweight, domain-specific compiler designed for robotics motion planning and real-time safety filtering. It takes declarative robot kinematic descriptions and task-space manifold constraints (`.cudro` specifications), lowers them to an inlined **Expression DAG**, differentiates them via **forward-mode dual numbers**, and generates specialized C kernels compiled **just-in-time (JIT) at runtime** in `< 15 ms` via `libtcc`.
+**Cudro** is a lightweight, dependency-free domain-specific compiler written from scratch in C++. It parses declarative robot kinematic descriptions and task manifold constraints (`.cudro` specifications), lowers them into an inlined, hash-consed **Expression DAG**, computes analytical constraint Jacobians via **forward-mode dual numbers / symbolic AD**, and emits specialized, allocation-free C kernels compiled **just-in-time (JIT) in memory** in `< 10 ms` via `libtcc`.
 
-### The Core Problem Cudro Solves
-State-of-the-art vectorized motion planners (e.g. *McVAMP*, IROS 2026) use ahead-of-time (AOT) tracing compilers to generate loop-unrolled SIMD kernels for constraint projection. However, AOT compilers require offline recompilation and relinking whenever a constraint or robot geometry changes.
+### What Cudro Does
+State-of-the-art motion planning algorithms (such as Constrained RRT) require repeatedly projecting robot configurations onto task constraint manifolds ($g(q) = 0$, e.g. maintaining an end-effector orientation or keeping a tool tip on a plane). 
 
-**Cudro closes this AOT → Runtime gap**:
-- **Dynamic Task Adaptation**: Accept newly perceived constraints (e.g., table height changes, new tool lengths, dynamic keep-out zones) on the fly.
-- **Instant Specialization**: Compile specialized machine code directly in memory in milliseconds without restarting or rebuilding the host process.
-- **Manifold Projection**: Damped Levenberg-Marquardt (LM) iterative solver inside the generated kernel projects unconstrained configurations onto safe task manifolds at high frequencies.
-- **Safety Layer for Vision-Language-Action (VLA) Models**: Project noisy neural policy action proposals onto certified constraint manifolds at 100–1000 Hz.
+Generic libraries often evaluate forward kinematics and Jacobians through deep matrix multiplications, virtual dispatch, or dynamic heap allocations. Cudro takes a compiler approach:
+- **Kinematic Inlining**: Lowers forward kinematics along kinematic trees directly into straight-line scalar operations with common subexpression elimination.
+- **Analytical Derivatives via DAG AD**: Generates exact symbolic Jacobian expressions directly inside the DAG, eliminating numerical finite-difference perturbations.
+- **In-Memory JIT Compilation**: Compiles specialized C kernels containing an inlined Levenberg-Marquardt (LM) solver directly into machine code via `libtcc` in milliseconds.
+- **Constrained Motion Planning**: Integrates directly with a C-RRT planner to generate continuous constraint-satisfying paths without external optimization solver dependencies.
 
 ---
 
@@ -95,7 +95,7 @@ cmake --build build
 
 ### Running Tests
 
-Cudro comes with a complete suite of 10 test suites guarded by **AddressSanitizer (ASan)** and **UndefinedBehaviorSanitizer (UBSan)**:
+Cudro comes with a complete suite of 11 test suites guarded by **AddressSanitizer (ASan)** and **UndefinedBehaviorSanitizer (UBSan)**:
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -112,6 +112,7 @@ ctest --test-dir build --output-on-failure
 8. `reference`: **Differential validation** against independent Eigen reference models across 10,000 configurations
 9. `planner`: **Constrained motion planning** (C-RRT-Connect) validating continuous manifold trajectory generation on multi-robot models
 10. `fuzz`: Fuzz-lite crash-freedom test under random byte streams
+11. `complex_workloads`: 1 kHz control loop benchmark, 14-DoF bimanual branching dual-arms, $M=6$ multi-link constraints, arbitrary spatial skew axes (`RotAxis`), and 10,000 adversarial singularity stress tests
 
 ---
 
@@ -217,28 +218,36 @@ lr.num_inputs = lr.dag.num_inputs();
 // 3. Generate C code
 std::string c_code = cudro::generate_scalar_c(lr);
 
-// 4. JIT Compile in Memory (< 15 ms)
+// 4. JIT Compile in Memory (< 10 ms)
 auto mod = cudro::TCCJIT::compile(c_code);
-auto project_fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
+auto project_fn = mod.get_symbol<int(*)(const float*, int, float*)>("project");
 auto eval_fn = mod.get_symbol<void(*)(const float*, int, float*)>("evaluate_constraints");
 
-// 5. Execute in real-time control loop
+// 5. Execute projection
 std::vector<float> q_init = {0.2f, 0.3f};
 std::vector<float> q_proj(lr.num_inputs);
-project_fn(q_init.data(), lr.num_inputs, q_proj.data());
+int status = project_fn(q_init.data(), lr.num_inputs, q_proj.data());
+if (status == 0) {
+    // Successfully converged onto the constraint manifold
+}
 ```
 
 ---
 
 ## 📊 Performance Characteristics
 
-| Metric | Measured Value (Post-Phase 2 Analytical Jacobians) | Improvement Factor |
+| Metric | Measured Value (x86_64 Linux Benchmark) | Capability / Notes |
 |---|---|---|
+| **1 kHz Control Step Latency** | **3.53 $\mu$s median latency** (max 53.95 $\mu$s jitter) | Zero allocations in inner loop; well within 1,000 $\mu$s cycle budget |
+| **Adversarial Singularity Resilience** | **100% finite outputs** across 10,000 stress steps | **Zero NaN / Inf escapes** under near-singular rank conditions |
+| **Simultaneous Multi-Constraint Solving** | **Arbitrary $M \ge 1$ ($M=2, 3, 6, \dots$)** | Inlined damped normal equations with signed partial pivoting |
+| **Branching Kinematic Trees** | **14-DOF Bimanual Dual-Arm** (`bimanual14.cudro`) | Topological iterative resolution of arbitrary link hierarchies |
+| **Spatial Skew Axis Geometry** | **Arbitrary unit axes $\hat{k}$** (`arbitrary_axes_6r.cudro`) | Exact symbolic Rodrigues differentiation (zero truncation error) |
 | **In-Memory JIT Compilation Latency** | **5.1 – 9.5 ms** | **~2.5× faster** (from ~14 ms) |
 | **Batched Constraint Evaluation Throughput** | **2,640,000 – 6,490,000 configs / sec** | **~8× – 20× faster** |
 | **Batched Manifold Projection Throughput** | **85,920 – 120,000 full LM solves / sec** | **~10× – 14× faster** |
 | **Panda 7-DOF Projection Latency** | **11.6 $\mu$s / solve** (down from 16.7 $\mu$s) | **Exact analytical gradient (zero truncation error)** |
-| **Planar2R Lowered DAG Size** | **25 nodes** (down from 122) | **79.5% node reduction** |
+| **Planar2R Lowered DAG Size** | **25 nodes** (down from 122) | **79.5% node reduction** via whole-program hash-consing |
 | **Jacobian Codegen Strategy** | **Single-pass unified evaluator `evaluate_dag(q, g, J)`** | Eliminates $N$ finite-diff DAG passes per LM step |
 | **Differential Error vs Eigen Reference** | $< 10^{-4}$ across 10,000 random configurations | 100% verified agreement (30,022 assertions) |
 

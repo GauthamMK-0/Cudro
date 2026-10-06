@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
         }
         
         auto eval_fn = mod.get_symbol<void(*)(const float*, int, float*)>("evaluate_constraints");
-        auto proj_fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
+        auto proj_fn = mod.get_symbol<int(*)(const float*, int, float*)>("project");
         if (!eval_fn || !proj_fn) {
             std::fprintf(stderr, "Failed to resolve kernel entry points\n");
             return 1;
@@ -268,10 +268,15 @@ int main(int argc, char** argv) {
         std::vector<float> g_proj(num_constraints, 0.0f);
         
         eval_fn(q.data(), num_inputs, g_init.data());
-        proj_fn(q.data(), num_inputs, q_proj.data());
+        int status = proj_fn(q.data(), num_inputs, q_proj.data());
         eval_fn(q_proj.data(), num_inputs, g_proj.data());
 
+        const char* status_str = (status == 0) ? "SUCCESS (converged)" 
+                               : (status == 1) ? "MAX_ITERS exceeded" 
+                               : "NUMERICAL_ERROR";
+
         std::printf("JIT Compilation Time: %.2f ms\n", compile_ms);
+        std::printf("Projection Status: %s (code %d)\n", status_str, status);
         std::printf("Initial q = [");
         for (int i = 0; i < num_inputs; ++i) std::printf("%.3f%s", q[i], i + 1 < num_inputs ? ", " : "");
         std::printf("] -> g(q) = [");

@@ -15,10 +15,11 @@ struct CodegenOptions {
     bool debug_comments = false;
 };
 
-// Generate scalar C kernel: void project(const float* q, int n, float* out_g)
+// Generate scalar C kernel: int project(const float* q_in, int num_inputs, float* q_out)
+// Returns: 0 = SUCCESS (converged), 1 = MAX_ITERS exceeded, 2 = NUMERICAL_ERROR
 std::string generate_scalar_c(const LowerResult& lower_result, const CodegenOptions& opts = {});
 
-// Generate batched AVX2 C kernel: void project_batch(const float* q_batch, int batch_size, int num_inputs, float* out_g_batch)
+// Generate batched C kernel: void project_batch(const float* q_batch, int batch_size, int num_inputs, float* q_out_batch)
 std::string generate_batched_c(const LowerResult& lower_result, const CodegenOptions& opts = {});
 
 // Dynamic CPU feature detection helper

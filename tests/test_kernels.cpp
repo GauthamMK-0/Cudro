@@ -117,7 +117,7 @@ task keep_ee_x {
     auto eval_fn = mod.get_symbol<void(*)(const float*, int, float*)>("evaluate_constraints");
     REQUIRE(eval_fn != nullptr);
 
-    auto proj_fn = mod.get_symbol<void(*)(const float*, int, float*)>("project");
+    auto proj_fn = mod.get_symbol<int(*)(const float*, int, float*)>("project");
     REQUIRE(proj_fn != nullptr);
 
     // Initial non-zero angle where Jacobian is non-zero
@@ -127,11 +127,51 @@ task keep_ee_x {
     CHECK(std::abs(g_init[0]) > 0.01f);
 
     std::vector<float> q_proj(2, 0.0f);
-    proj_fn(q_init.data(), 2, q_proj.data());
+    int status = proj_fn(q_init.data(), 2, q_proj.data());
+    CHECK(status == 0); // 0 = SUCCESS (converged)
 
     std::vector<float> g_proj(1, 0.0f);
     eval_fn(q_proj.data(), 2, g_proj.data());
     CHECK(std::abs(g_proj[0]) < 1e-4f);
+}
+
+TEST_CASE("Projection status codes: Infeasible Target Reports Max Iters Exceeded") {
+    std::string infeasible_src = R"(
+robot planar2r {
+  joint j1 { type revolute; axis [0,0,1]; origin [0,0,0]; }
+  joint j2 { type revolute; axis [0,0,1]; origin [1.0,0,0]; }
+  link base { spheres [[0,0,0, 0.05]]; parent world; joint_ref j1; }
+  link arm1 { spheres [[0.5,0,0, 0.04]]; parent base; joint_ref j2; }
+  link ee { spheres [[0.5,0,0, 0.03]]; parent arm1; }
+}
+task unreachable_target {
+  link ee;
+  plane { point_on_link [0,0,0]; normal [1,0,0]; offset 10.0; }
+}
+)";
+
+    auto spec = parse_and_check(infeasible_src);
+    cudro::ExprDAG dag;
+    auto constraint_outputs = cudro::lower(spec, dag);
+    REQUIRE(constraint_outputs.size() == 1);
+
+    cudro::LowerResult lr;
+    lr.dag = std::move(dag);
+    lr.constraint_outputs = std::move(constraint_outputs);
+    lr.num_inputs = lr.dag.num_inputs();
+
+    std::string scalar_code = cudro::generate_scalar_c(lr);
+    auto mod = cudro::TCCJIT::compile(scalar_code);
+    REQUIRE(mod.handle != nullptr);
+
+    auto proj_fn = mod.get_symbol<int(*)(const float*, int, float*)>("project");
+    REQUIRE(proj_fn != nullptr);
+
+    std::vector<float> q_init = {0.0f, 0.0f};
+    std::vector<float> q_proj(2, 0.0f);
+    int status = proj_fn(q_init.data(), 2, q_proj.data());
+    // Arm reach is at most 2.0; offset 10.0 is kinematically unreachable
+    CHECK(status == 1); // 1 = MAX_ITERS exceeded without convergence
 }
 
 TEST_CASE("Batched Kernel Compilation and Multi-Config Execution") {

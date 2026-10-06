@@ -35,7 +35,7 @@ struct JointLimits {
 
 class ConstrainedPlanner {
 public:
-    using ProjectFn = void(*)(const float* q_in, int num_inputs, float* q_out);
+    using ProjectFn = int(*)(const float* q_in, int num_inputs, float* q_out);
     using EvaluateFn = void(*)(const float* q, int num_inputs, float* out_g);
 
     ConstrainedPlanner(int dof, int num_constraints,
