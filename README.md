@@ -250,9 +250,3 @@ if (status == 0) {
 | **Planar2R Lowered DAG Size** | **25 nodes** (down from 122) | **79.5% node reduction** via whole-program hash-consing |
 | **Jacobian Codegen Strategy** | **Single-pass unified evaluator `evaluate_dag(q, g, J)`** | Eliminates $N$ finite-diff DAG passes per LM step |
 | **Differential Error vs Eigen Reference** | $< 10^{-4}$ across 10,000 random configurations | 100% verified agreement (30,022 assertions) |
-
----
-
-## 📖 Codebook & Developer Documentation
-
-For a detailed file-by-file walkthrough of compiler concepts (lexer, recursive descent parsing, symbol tables, DAG lowering, dual-number AD, C emission, JIT compilation, and CUDA integration), see the [Cudro Codebook](docs/codebook/README.md).
